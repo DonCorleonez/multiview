@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -35,19 +35,35 @@ jobs:
             echo "::warning::No MV_KEYSTORE_B64 secret: release APK is signed with a throwaway debug key (updates will need an uninstall)."
           fi
 
-      - name: Unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
-
-      - name: Lint
-        run: ./gradlew --no-daemon lintDebug
-
-      - name: Build APKs
+      - name: Test, lint, build, check
         env:
           MV_STORE_PASSWORD: ${{ secrets.MV_STORE_PASSWORD }}
-        run: ./gradlew --no-daemon assembleDebug assembleRelease
+        run: |
+          set -o pipefail
+          {
+            set -e
+            echo "== unit tests"; ./gradlew --no-daemon --console=plain testDebugUnitTest
+            echo "== lint"; ./gradlew --no-daemon --console=plain lintDebug
+            echo "== assemble"; ./gradlew --no-daemon --console=plain assembleDebug assembleRelease
+            echo "== apk checks"; tools/check-apk.sh app/build/outputs/apk/release/app-release.apk
+          } 2>&1 | tee build.log
 
-      - name: APK checks (permissions, manifest, size)
-        run: tools/check-apk.sh app/build/outputs/apk/release/app-release.apk
+      - name: Report failure log as commit comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "CI failed (run ${GITHUB_RUN_NUMBER}). Last part of the log:"
+            echo '```'
+            grep -E "^(== |e: |w: |FAILURE|BUILD|\* What went wrong|> |Execution failed|.*Test > .*FAILED|.*Error|.*error:|CHECK FAILED)" build.log | tail -n 80 || true
+            echo '--- tail ---'
+            tail -n 120 build.log || true
+            echo '```'
+          } > comment.md
+          for f in app/build/reports/lint-results-debug.txt; do [ -f "$f" ] && { echo; echo "lint:"; echo '```'; head -c 20000 "$f"; echo '```'; } >> comment.md; done
+          head -c 60000 comment.md > c.md
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" -F body=@c.md > /dev/null
 
       - name: Collect APKs
         run: |
