@@ -7,7 +7,10 @@ AAPT2=$(ls -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}"/build-tools/*/aapt2 | sort -V
 fail() { echo "CHECK FAILED: $*" >&2; exit 1; }
 
 # Permissions: INTERNET, plus what Media3/AndroidX add on their own.
-perms=$("$AAPT2" dump permissions "$APK" | sed -n "s/.*permission: \([^ ]*\).*/\1/p" | sort -u)
+raw=$("$AAPT2" dump permissions "$APK")
+echo "aapt2 dump permissions:"; echo "$raw" | sed 's/^/  | /'
+# lines look like: uses-permission: name='android.permission.INTERNET'  (older aapt2: uses-permission: android.permission.INTERNET)
+perms=$(echo "$raw" | sed -nE "s/^uses-permission(-sdk-23)?: *(name=')?([^' ]+).*/\3/p" | sort -u)
 echo "permissions:"; echo "$perms" | sed 's/^/  /'
 echo "$perms" | grep -qx "android.permission.INTERNET" || fail "INTERNET missing"
 extra=$(echo "$perms" | grep -vx "android.permission.INTERNET" \
