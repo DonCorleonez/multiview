@@ -44,7 +44,7 @@ Dengan kunci yang sama, update cukup dipasang dengan `adb install -r` dan akun t
 
 - `./gradlew testDebugUnitTest`: unit test (mock server Xtream, engine, layout, redaksi, penyimpanan)
 - CI (`.github/workflows/build.yml`): test, lint, build, cek APK (izin, manifest, ukuran), lalu Release otomatis setiap push ke `main`
-- Spesifikasi dan catatan implementasi ada di [docs/MULTIVIEW_HANDOFF.md](docs/MULTIVIEW_HANDOFF.md)
+- Spesifikasi dan catatan implementasi ada di [docs/MULTIVIEW_HANDOFF.md](docs/MULTIVIEW_HANDOFF.md); status terakhir dan langkah lanjutan untuk Codex ada di [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md)
 
 Keamanan: password dienkripsi di Android Keystore, kredensial tidak pernah ditulis ke log, ada `FLAG_SECURE` di layar akun, tidak ada backup, tidak ada telemetri.
 
