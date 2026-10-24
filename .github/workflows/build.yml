@@ -1,0 +1,83 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode signing key (optional)
+        env:
+          MV_KEYSTORE_B64: ${{ secrets.MV_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$MV_KEYSTORE_B64" ]; then
+            echo "$MV_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "MV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Release signing key present"
+          else
+            echo "::warning::No MV_KEYSTORE_B64 secret: release APK is signed with a throwaway debug key (updates will need an uninstall)."
+          fi
+
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Lint
+        run: ./gradlew --no-daemon lintDebug
+
+      - name: Build APKs
+        env:
+          MV_STORE_PASSWORD: ${{ secrets.MV_STORE_PASSWORD }}
+        run: ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: APK checks (permissions, manifest, size)
+        run: tools/check-apk.sh app/build/outputs/apk/release/app-release.apk
+
+      - name: Collect APKs
+        run: |
+          mkdir -p out
+          V="1.0.${GITHUB_RUN_NUMBER}"
+          cp app/build/outputs/apk/release/app-release.apk "out/multiview-$V.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/multiview-$V-debug.apk"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: out/*.apk
+          retention-days: 30
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="1.0.${GITHUB_RUN_NUMBER}"
+          gh release create "v$V" out/*.apk --title "Multiview $V" \
+            --notes "Install: \`adb install -r multiview-$V.apk\`. The -debug APK logs player metrics for device tests (installs side by side)." \
+            --target "$GITHUB_SHA"
