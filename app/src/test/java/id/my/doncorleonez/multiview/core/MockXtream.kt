@@ -1,41 +1,64 @@
 package id.my.doncorleonez.multiview.core
 
-import com.sun.net.httpserver.HttpServer
-import java.net.InetSocketAddress
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URLDecoder
+import kotlin.concurrent.thread
 
-/** Local Xtream panel for tests (JDK HttpServer). One user/password; fixtures generated in code. */
+/**
+ * Local Xtream panel for tests. Plain ServerSocket (the Android unit-test classpath has no
+ * com.sun.net.httpserver). One user/password; fixtures generated in code.
+ */
 class MockXtream(
     private val user: String,
     private val pass: String,
     private val channels: Int = 50,
     private val categories: Int = 5,
 ) : AutoCloseable {
-    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val requests = ArrayList<String>()
     @Volatile var rejectWith: Int = 0
+    @Volatile private var running = true
 
-    val base: String get() = "http://127.0.0.1:${server.address.port}"
+    val base: String get() = "http://127.0.0.1:${server.localPort}"
 
     init {
-        server.createContext("/player_api.php") { ex ->
-            val q = (ex.requestURI.rawQuery ?: "").split('&').filter { it.contains('=') }
+        thread(isDaemon = true, name = "mock-xtream") {
+            while (running) {
+                val s = try { server.accept() } catch (e: Exception) { break }
+                thread(isDaemon = true) { handle(s) }
+            }
+        }
+    }
+
+    private fun handle(s: Socket) {
+        s.use { sock ->
+            val reader = BufferedReader(InputStreamReader(sock.getInputStream(), Charsets.ISO_8859_1))
+            val requestLine = reader.readLine() ?: return
+            while (true) { val h = reader.readLine() ?: break; if (h.isEmpty()) break }
+            val target = requestLine.split(' ').getOrNull(1) ?: "/"
+            val path = target.substringBefore('?')
+            val q = target.substringAfter('?', "").split('&').filter { it.contains('=') }
                 .associate { URLDecoder.decode(it.substringBefore('='), "UTF-8") to URLDecoder.decode(it.substringAfter('='), "UTF-8") }
             synchronized(requests) { requests.add(q["action"] ?: "auth") }
             val (code, body) = when {
+                path != "/player_api.php" -> 404 to "{}"
                 rejectWith != 0 -> rejectWith to "{}"
-                q["username"] != user || q["password"] != pass ->
-                    200 to """{"user_info":{"auth":0}}"""
+                q["username"] != user || q["password"] != pass -> 200 to """{"user_info":{"auth":0}}"""
                 q["action"] == null -> 200 to authJson()
                 q["action"] == "get_live_categories" -> 200 to categoriesJson()
                 q["action"] == "get_live_streams" -> 200 to streamsJson()
                 else -> 200 to "[]"
             }
             val bytes = body.toByteArray(Charsets.UTF_8)
-            ex.sendResponseHeaders(code, bytes.size.toLong())
-            ex.responseBody.use { it.write(bytes) }
+            val out = sock.getOutputStream()
+            out.write("HTTP/1.1 $code X\r\nContent-Type: application/json\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
+            out.write(bytes)
+            out.flush()
         }
-        server.start()
     }
 
     private fun authJson() = """
@@ -67,5 +90,8 @@ class MockXtream(
         append(']')
     }
 
-    override fun close() = server.stop(0)
+    override fun close() {
+        running = false
+        server.close()
+    }
 }
